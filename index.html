@@ -426,57 +426,61 @@
                     // Step 1: Read and parse JSON
                     this.updateStepIndicator(2, 'active');
                     this.updateProgress(10, 'Reading JSON file...');
-                    console.log("in before")
                     const jsonText = await this.readFile(this.selectedFile);
-                    console.log("in after")
 
-                    console.log("in before parse")
                     this.updateProgress(20, 'Parsing JSON...');
                     const jsonData = JSON.parse(jsonText);
-                    console.log("in after parse")
 
                     // Step 2: Clean and process JSON
-                    console.log("in before clean")
                     this.updateProgress(30, 'Cleaning JSON data...');
                     const cleanedData = await this.cleanJsonData(jsonData);
-                    console.log("in after clean")
 
-                    console.log("in before minify")
                     this.updateProgress(40, 'Minifying JSON...');
                     const minifiedJson = JSON.stringify(cleanedData, null, 0);
                     this.updateStepIndicator(2, 'completed');
-                    console.log("in after minify")
 
 
                     // Step 3: Compress with LZW and encode to Base64
-                    console.log("in before compress")
                     this.updateStepIndicator(3, 'active');
                     this.updateProgress(50, 'Compressing with LZW...');
-                    const compressedData = await this.lzwCompress(minifiedJson);
-                    console.log("in after compress")
+                    const compressedDataBase64 = await this.deflateCompress(minifiedJson);
+                    console.log(compressedDataBase64, minifiedJson.substring(minifiedJson.length - 100, minifiedJson.length));
 
-                    console.log("in before base64")
+                    /*
+                    const blob = new Blob([compressedData], { type: "application/octet-stream" });
+
+                    // Create a temporary link element
+                    const link = document.createElement("a");
+                    link.href = URL.createObjectURL(blob);
+                    link.download = 'compressed.txt';
+
+                    // Append to DOM, click to trigger download, then remove
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+
+                    // Release memory
+                    URL.revokeObjectURL(link.href);
+
                     this.updateProgress(60, 'Encoding to Base64...');
                     const base64Data = this.encodeBase64(compressedData);
                     this.updateStepIndicator(3, 'completed');
-                    console.log("in after base64")
+                    */
 
                     // Step 4: Convert to image
-                    console.log("in before image")
                     this.updateStepIndicator(4, 'active');
                     this.updateProgress(70, 'Converting to image...');
-                    const imageResult = await this.convertToImage(base64Data);
+                    const imageResult = await this.convertToImage(compressedDataBase64);
                     this.updateStepIndicator(4, 'completed');
-                    console.log("in after image")
 
                     // Store results
-                    this.results.base64Data = base64Data;
+                    this.results.base64Data = compressedDataBase64;
                     this.results.imageData = imageResult;
                     this.results.stats = {
                         originalSize: jsonText.length,
-                        compressedSize: compressedData.length,
-                        base64Size: base64Data.length,
-                        compressionRatio: ((jsonText.length - compressedData.length) / jsonText.length * 100).toFixed(1),
+                        compressedSize: compressedDataBase64.length,
+                        base64Size: compressedDataBase64.length,
+                        compressionRatio: ((jsonText.length - compressedDataBase64.length) / jsonText.length * 100).toFixed(1),
                         imageDimensions: `${imageResult.width}×${imageResult.height}`
                     };
 
@@ -600,7 +604,7 @@
                 if (data.layers) {
                     const keysToRemoveLayer = [
                         'opacity', 'x', 'y', 'width', 'height', 'id',
-                        'visible', 'type', 'name', 'draworder'
+                        'visible', 'draworder'
                     ];
 
                     data.layers.forEach(layer => {
@@ -614,264 +618,104 @@
             }
 
 
-            // Replace the existing lzwCompress method with this optimized version
-            async lzwCompress(data) {
-                const dataSize = data.length;
+            async deflateCompress(data) {
+                try {
+                    this.updateProgress(50, 'Starting compression...');
 
-                // For very large files (over 15MB), use chunked processing
-                if (dataSize > 15 * 1024 * 1024) {
-                    return this.lzwCompressChunked(data);
+                    // Create a single compression stream for the entire data
+                    const stream = new CompressionStream('deflate');
+                    const writer = stream.writable.getWriter();
+                    const reader = stream.readable.getReader();
+
+                    // Collect all compressed chunks
+                    const compressedChunks = [];
+
+                    // Start reading compressed data
+                    const readPromise = (async () => {
+                        try {
+                            while (true) {
+                                const { value, done } = await reader.read();
+                                if (done) break;
+                                if (value) compressedChunks.push(value);
+                            }
+                        } finally {
+                            reader.releaseLock();
+                        }
+                    })();
+
+                    // Write data in chunks to avoid memory issues
+                    const writePromise = (async () => {
+                        try {
+                            const chunkSize = 1024 * 1024; // 1MB chunks
+                            const totalChunks = Math.ceil(data.length / chunkSize);
+
+                            for (let i = 0; i < totalChunks; i++) {
+                                const start = i * chunkSize;
+                                const end = Math.min(start + chunkSize, data.length);
+
+                                let chunk;
+                                if (typeof data === 'string') {
+                                    // If data is string, encode the slice
+                                    chunk = new TextEncoder().encode(data.slice(start, end));
+                                } else {
+                                    // If data is already Uint8Array or similar, just slice
+                                    chunk = data.slice(start, end);
+                                }
+
+                                await writer.write(chunk);
+
+                                // Update progress
+                                const progress = 50 + ((i + 1) / totalChunks) * 30;
+                                this.updateProgress(progress, `Compressing chunk ${i + 1}/${totalChunks}...`);
+
+                                // Yield control periodically
+                                if (i % 10 === 0) {
+                                    await new Promise(resolve => setTimeout(resolve, 0));
+                                }
+                            }
+                        } finally {
+                            await writer.close();
+                        }
+                    })();
+
+                    // Wait for both reading and writing to complete
+                    await Promise.all([writePromise, readPromise]);
+
+                    this.updateProgress(80, 'Combining compressed data...');
+
+                    // Combine all compressed chunks
+                    const totalLength = compressedChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+                    const finalCompressed = new Uint8Array(totalLength);
+                    let offset = 0;
+
+                    for (const chunk of compressedChunks) {
+                        finalCompressed.set(chunk, offset);
+                        offset += chunk.length;
+                    }
+
+                    this.updateProgress(90, 'Converting to base64...');
+
+                    // Convert to base64
+                    return this.arrayToBase64Chunked(finalCompressed);
+
+                } catch (error) {
+                    throw new Error(`Compression failed: ${error.message}`);
                 }
-
-                // Standard compression for smaller files
-                return this.lzwCompressStandard(data);
             }
 
-            // Chunked LZW compression for very large files
-            async lzwCompressChunked(data) {
-                const chunkSize = 2 * 1024 * 1024; // 2MB chunks
-                const totalChunks = Math.ceil(data.length / chunkSize);
-                const compressedChunks = [];
+            // Helper method to convert large arrays to base64 without stack overflow
+            arrayToBase64Chunked(uint8Array) {
+                const chunkSize = 8192; // 8KB chunks for base64 conversion
+                let result = '';
 
-                // Initialize dictionaries once
-                const { encodeDict, decodeDict } = this.initializeLZWDictionaries();
-
-                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-                    const start = chunkIndex * chunkSize;
-                    const end = Math.min(start + chunkSize, data.length);
-                    const chunk = data.slice(start, end);
-
-                    // Update progress
-                    const progress = 50 + (chunkIndex / totalChunks) * 10;
-                    this.updateProgress(progress, `Compressing chunk ${chunkIndex + 1}/${totalChunks}...`);
-
-                    // Compress chunk
-                    const compressedChunk = await this.compressChunkAsync(chunk, encodeDict, decodeDict);
-                    compressedChunks.push(compressedChunk);
-
-                    // Yield control every chunk to prevent blocking
-                    await new Promise(resolve => setTimeout(resolve, 10));
-
-                    // Force garbage collection if available
-                    if (window.gc && chunkIndex % 5 === 0) {
-                        window.gc();
-                    }
-                }
-
-                // Join compressed chunks
-                const result = compressedChunks.join('|CHUNK|'); // Use delimiter to separate chunks
-
-                // Verify integrity on a sample (not full data for performance)
-                const sampleSize = Math.min(1000, data.length);
-                const sample = data.slice(0, sampleSize);
-                const compressedSample = await this.lzwCompressStandard(sample);
-                const decompressedSample = this.lzwDecompressStandard(compressedSample);
-
-                if (decompressedSample !== sample) {
-                    throw new Error('LZW compression integrity check failed on sample');
+                for (let i = 0; i < uint8Array.length; i += chunkSize) {
+                    const end = Math.min(i + chunkSize, uint8Array.length);
+                    const chunk = uint8Array.slice(i, end);
+                    const chunkString = String.fromCharCode.apply(null, chunk);
+                    result += btoa(chunkString);
                 }
 
                 return result;
-            }
-
-            // Standard LZW compression for smaller files
-            async lzwCompressStandard(data) {
-                return new Promise((resolve, reject) => {
-                    try {
-                        const { encodeDict, decodeDict } = this.initializeLZWDictionaries();
-
-                        setTimeout(() => {
-                            try {
-                                const compressed = this.compressSync(data, encodeDict);
-
-                                // Verify integrity for standard compression
-                                const decompressed = this.decompressSync(compressed, decodeDict);
-                                if (decompressed !== data) {
-                                    reject(new Error('LZW compression integrity check failed'));
-                                } else {
-                                    resolve(compressed);
-                                }
-                            } catch (error) {
-                                reject(error);
-                            }
-                        }, 0);
-                    } catch (error) {
-                        reject(error);
-                    }
-                });
-            }
-
-            // Initialize LZW dictionaries (moved to separate method for reuse)
-            initializeLZWDictionaries() {
-                const encodeDict = {};
-                const decodeDict = {};
-                const numericEncodingChars = {};
-
-                // Build numeric encoding chars (skip ASCII 45 which is "-")
-                let c = 33;
-                for (let i = 0; i < 100; i++) {
-                    if (c === 45) { // ASCII code for "-"
-                        c++; // skip "-", it is allocated as a lzw encoding delimiter
-                    }
-                    numericEncodingChars[i] = String.fromCharCode(c);
-                    c++;
-                }
-
-                // Build encode/decode dictionaries
-                for (let i in numericEncodingChars) {
-                    encodeDict[i] = numericEncodingChars[i];
-                    decodeDict[numericEncodingChars[i]] = parseInt(i);
-                }
-
-                return { encodeDict, decodeDict };
-            }
-
-            // Async chunk compression
-            async compressChunkAsync(chunk, encodeDict, decodeDict) {
-                return new Promise((resolve) => {
-                    setTimeout(() => {
-                        const result = this.compressSync(chunk, encodeDict);
-                        resolve(result);
-                    }, 0);
-                });
-            }
-
-            // Synchronous compression (core LZW algorithm)
-            compressSync(text, encodeDict) {
-                // Get dictionary function (matches Lua getdict)
-                function getdict(isEncode) {
-                    const dict = {};
-                    const s = " !#$%&'\"()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-                    const len = s.length;
-                    for (let i = 1; i <= len; i++) {
-                        if (isEncode) {
-                            dict[s.charAt(i - 1)] = i;
-                        } else {
-                            dict[i] = s.charAt(i - 1);
-                        }
-                    }
-                    return { dict, len };
-                }
-
-                // Get encoded dict code (matches Lua getEncodedDictCode)
-                function getEncodedDictCode(code) {
-                    const encodedDictCode = [];
-                    let nums = "";
-                    const codeStr = code.toString();
-
-                    for (let i = 0; i < codeStr.length; i++) {
-                        const n = codeStr[i];
-                        const temp = nums + n;
-                        if (temp[0] !== "0" && encodeDict[parseInt(temp)] !== undefined) {
-                            nums = temp;
-                        } else {
-                            encodedDictCode.push(encodeDict[parseInt(nums)]);
-                            nums = n;
-                        }
-                    }
-                    encodedDictCode.push(encodeDict[parseInt(nums)]);
-                    return encodedDictCode.join("");
-                }
-
-                // Encode dict codes (matches Lua encodeDictCodes)
-                function encodeDictCodes(codes) {
-                    const translated = [];
-                    for (let i = 0; i < codes.length; i++) {
-                        translated[i] = getEncodedDictCode(codes[i]);
-                    }
-                    return translated;
-                }
-
-                // Main compress function
-                let s = "";
-                let ch;
-                const dlen = text.length;
-                const result = [];
-                const { dict, len: dictLen } = getdict(true);
-                let len = dictLen;
-                let temp;
-
-                for (let i = 0; i < dlen; i++) {
-                    ch = text[i];
-                    temp = s + ch;
-                    if (dict[temp] !== undefined) {
-                        s = temp;
-                    } else {
-                        result.push(dict[s]);
-                        len = len + 1;
-                        dict[temp] = len;
-                        s = ch;
-                    }
-                }
-                result.push(dict[s]);
-
-                const finalResult = encodeDictCodes(result);
-                return finalResult.join("-");
-            }
-
-            // Synchronous decompression (for verification)
-            decompressSync(text, decodeDict) {
-                // Get dictionary function
-                function getdict(isEncode) {
-                    const dict = {};
-                    const s = " !#$%&'\"()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-                    const len = s.length;
-                    for (let i = 1; i <= len; i++) {
-                        if (isEncode) {
-                            dict[s.charAt(i - 1)] = i;
-                        } else {
-                            dict[i] = s.charAt(i - 1);
-                        }
-                    }
-                    return { dict, len };
-                }
-
-                // Decode dict codes
-                function decodeDictCodes(codes) {
-                    const translated = [];
-                    for (let i = 0; i < codes.length; i++) {
-                        translated[i] = "";
-                        for (let j = 0; j < codes[i].length; j++) {
-                            const c = codes[i][j];
-                            translated[i] += decodeDict[c];
-                        }
-                        translated[i] = parseInt(translated[i]);
-                    }
-                    return translated;
-                }
-
-                const { dict, len: dictLen } = getdict(false);
-                let entry;
-                let ch;
-                let prevCode, currCode;
-                const result = [];
-                let data = text.split("-");
-
-                data = decodeDictCodes(data);
-
-                prevCode = data[0];
-                result.push(dict[prevCode]);
-
-                for (let i = 1; i < data.length; i++) {
-                    currCode = data[i];
-                    entry = dict[currCode];
-                    if (entry !== undefined) {
-                        ch = entry[0];
-                        result.push(entry);
-                    } else {
-                        ch = dict[prevCode][0];
-                        result.push(dict[prevCode] + ch);
-                    }
-                    dict[Object.keys(dict).length + 1] = dict[prevCode] + ch;
-                    prevCode = currCode;
-                }
-                return result.join("");
-            }
-
-            // Standard decompression method (for backward compatibility)
-            lzwDecompressStandard(compressedData) {
-                const { decodeDict } = this.initializeLZWDictionaries();
-                return this.decompressSync(compressedData, decodeDict);
             }
 
             encodeBase64(data) {
@@ -900,78 +744,90 @@
                 return result;
             }
 
-            async convertToImage(base64Data) {
-                const textBytes = new TextEncoder().encode(base64Data);
-                const pixelsNeeded = Math.ceil(textBytes.length / 4);
+            async convertToImage(text) {
+                return new Promise((resolve, reject) => {
+                    try {
+                        // Convert text to bytes
+                        const textBytes = new TextEncoder().encode(text);
 
-                // Calculate optimal dimensions
-                let width = Math.ceil(Math.sqrt(pixelsNeeded));
-                let height = Math.ceil(pixelsNeeded / width);
+                        // Calculate optimal dimensions (each pixel stores 3 bytes in RGB channels)
+                        const pixelsNeeded = Math.ceil(textBytes.length / 3);
+                        let width = Math.ceil(Math.sqrt(pixelsNeeded));
+                        let height = Math.ceil(pixelsNeeded / width);
 
-                // Ensure within 1024x1024 limit
-                if (width > 1024 || height > 1024) {
-                    if (pixelsNeeded > 1024 * 1024) {
-                        throw new Error('Data too large for image encoding');
-                    }
-                    width = Math.min(1024, width);
-                    height = Math.ceil(pixelsNeeded / width);
-                }
+                        // Ensure we don't exceed reasonable limits (using 1024x1024 like the React version)
+                        if (width > 1024 || height > 1024) {
+                            if (pixelsNeeded > 1024 * 1024) {
+                                reject(new Error(`Data too large: requires ${pixelsNeeded} pixels but maximum is ${1024 * 1024} pixels`));
+                                return;
+                            }
 
-                const canvas = document.getElementById('canvas');
-                const ctx = canvas.getContext('2d');
+                            width = Math.min(1024, width);
+                            height = Math.ceil(pixelsNeeded / width);
 
-                // Create image data
-                canvas.width = width;
-                canvas.height = height;
-                const imageData = ctx.createImageData(width, height);
-                const data = imageData.data;
-
-                // Process in chunks for better performance
-                const chunkSize = 1024 * 4; // 4KB chunks
-                const totalChunks = Math.ceil(base64Data.length / chunkSize);
-
-                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-                    const startIdx = chunkIndex * chunkSize;
-                    const endIdx = Math.min(startIdx + chunkSize, base64Data.length);
-
-                    // Fill pixel data
-                    for (let i = startIdx; i < endIdx; i++) {
-                        const pixelIndex = Math.floor(i / 4);
-                        const channelIndex = i % 4;
-                        const dataIndex = pixelIndex * 4 + channelIndex;
-
-                        if (dataIndex < data.length) {
-                            data[dataIndex] = textBytes[i];
+                            if (height > 1024) {
+                                height = 1024;
+                                width = Math.ceil(pixelsNeeded / height);
+                            }
                         }
+
+                        // Get canvas and context
+                        const canvas = document.getElementById('canvas');
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+
+                        // Create image data
+                        const imageData = ctx.createImageData(width, height);
+                        const data = imageData.data;
+
+                        // Encode text bytes into image data
+                        for (let i = 0; i < textBytes.length; i++) {
+                            const pixelIndex = Math.floor(i / 3);
+                            const channelIndex = i % 3;
+                            const dataIndex = pixelIndex * 4 + channelIndex;
+
+                            if (dataIndex < data.length) {
+                                data[dataIndex] = textBytes[i];
+                            }
+                        }
+
+                        // Set alpha channel to 255 for all used pixels
+                        for (let i = 0; i < Math.ceil(textBytes.length / 3); i++) {
+                            const alphaIndex = i * 4 + 3;
+                            if (alphaIndex < data.length) {
+                                data[alphaIndex] = 255;
+                            }
+                        }
+
+                        // Fill remaining pixels with zeros and full alpha
+                        for (let i = Math.ceil(textBytes.length / 3) * 4; i < data.length; i += 4) {
+                            data[i] = 0;     // R
+                            data[i + 1] = 0; // G
+                            data[i + 2] = 0; // B
+                            data[i + 3] = 255; // A
+                        }
+
+                        // Put image data on canvas
+                        ctx.putImageData(imageData, 0, 0);
+
+                        // Convert to blob and return result
+                        canvas.toBlob((blob) => {
+                            if (blob) {
+                                resolve({
+                                    blob,
+                                    width,
+                                    height,
+                                    url: URL.createObjectURL(blob)
+                                });
+                            } else {
+                                reject(new Error('Failed to create image blob'));
+                            }
+                        }, 'image/png');
+
+                    } catch (error) {
+                        reject(error);
                     }
-
-                    // Update progress
-                    this.updateProgress(80 + ((chunkIndex + 1) / totalChunks) * 15,
-                        `Creating image... ${Math.round(((chunkIndex + 1) / totalChunks) * 100)}%`);
-
-                    // Yield control
-                    if (chunkIndex % 10 === 0) {
-                        await new Promise(resolve => setTimeout(resolve, 0));
-                    }
-                }
-
-                // Fill remaining pixels with zeros
-                for (let i = Math.ceil(textBytes.length / 4) * 4; i < data.length; i++) {
-                    data[i] = 0;
-                }
-
-                // Put image data on canvas
-                ctx.putImageData(imageData, 0, 0);
-
-                return new Promise((resolve) => {
-                    canvas.toBlob((blob) => {
-                        resolve({
-                            blob,
-                            width,
-                            height,
-                            url: URL.createObjectURL(blob)
-                        });
-                    }, 'image/png');
                 });
             }
 
