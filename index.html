@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <h1>majorh5's janky Tiled Map Processor</h1>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .glass-container {
+            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+        }
+
+        .drop-zone {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .drop-zone-default {
+            border: 2px dashed #d1d5db;
+            background: linear-gradient(145deg, #f9fafb, #f3f4f6);
+        }
+
+        .drop-zone-default:hover {
+            border-color: #6b7280;
+            background: linear-gradient(145deg, #ffffff, #f9fafb);
+            transform: translateY(-1px);
+            box-shadow: 0 10px 25px -3px rgba(0, 0, 0, 0.1);
+        }
+
+        .drop-zone-selected {
+            border: 2px dashed #10b981;
+            background: linear-gradient(145deg, #ecfdf5, #d1fae5);
+            animation: pulse-green 2s infinite;
+        }
+
+        @keyframes pulse-green {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+            }
+
+            50% {
+                box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
+            }
+        }
+
+        .progress-bar {
+            background: linear-gradient(90deg, #3b82f6, #1d4ed8, #3b82f6);
+            background-size: 200% 100%;
+            animation: shimmer 2s infinite linear;
+            transition: width 0.3s ease;
+        }
+
+        @keyframes shimmer {
+            0% {
+                background-position: -200% 0;
+            }
+
+            100% {
+                background-position: 200% 0;
+            }
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: linear-gradient(135deg, #2563eb, #1e40af);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px -3px rgba(59, 130, 246, 0.4);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #10b981, #059669);
+        }
+
+        .btn-success:hover {
+            background: linear-gradient(135deg, #059669, #047857);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px -3px rgba(16, 185, 129, 0.4);
+        }
+
+        .step-indicator {
+            position: relative;
+        }
+
+        .step-indicator::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            right: -20px;
+            width: 40px;
+            height: 2px;
+            background: #d1d5db;
+            transform: translateY(-50%);
+        }
+
+        .step-indicator:last-child::after {
+            display: none;
+        }
+
+        .step-active {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+        }
+
+        .step-completed {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+        }
+
+        .icon-spin {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body class="min-h-screen p-4">
+    <div class="max-w-6xl mx-auto">
+        <div class="glass-container rounded-xl p-8 mb-8">
+            <div class="text-center mb-8">
+                <h1
+                    class="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-4">
+                    majorh5's janky Tiled Map Processor
+                </h1>
+                <p class="text-gray-600 text-lg">
+                    Complete pipeline: JSON cleanup → LZW compression → Base64 encoding → Image conversion
+                </p>
+            </div>
+
+            <!-- Process Flow Indicator -->
+            <div class="flex justify-center items-center mb-8 space-x-4">
+                <div id="step1" class="step-indicator px-4 py-2 rounded-lg bg-gray-200 text-gray-600 font-medium">
+                    1. Upload JSON
+                </div>
+                <div id="step2" class="step-indicator px-4 py-2 rounded-lg bg-gray-200 text-gray-600 font-medium">
+                    2. Process & Clean
+                </div>
+                <div id="step3" class="step-indicator px-4 py-2 rounded-lg bg-gray-200 text-gray-600 font-medium">
+                    3. Compress
+                </div>
+                <div id="step4" class="step-indicator px-4 py-2 rounded-lg bg-gray-200 text-gray-600 font-medium">
+                    4. Encode to Image
+                </div>
+            </div>
+
+            <!-- File Upload Section -->
+            <div class="mb-8">
+                <div id="dropZone" class="drop-zone drop-zone-default rounded-lg p-8 text-center cursor-pointer">
+                    <input type="file" accept=".json" id="fileInput" class="hidden">
+                    <div id="uploadPrompt" class="flex flex-col items-center space-y-4">
+                        <svg class="w-16 h-16 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12">
+                            </path>
+                        </svg>
+                        <div>
+                            <p class="text-xl font-semibold text-gray-700">Drop your Tiled Map JSON file here</p>
+                            <p class="text-gray-500">or click to browse (supports large files)</p>
+                        </div>
+                    </div>
+                    <div id="fileSelected" class="hidden flex flex-col items-center space-y-2">
+                        <svg class="w-12 h-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7">
+                            </path>
+                        </svg>
+                        <p id="fileName" class="text-lg font-semibold text-green-700"></p>
+                        <p id="fileSize" class="text-green-600"></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Configuration -->
+            <div class="mb-8 glass-container p-6 rounded-lg">
+                <h3 class="text-lg font-semibold mb-4">Processing Configuration</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="layerToRemove" class="block text-sm font-medium text-gray-700 mb-2">
+                            Layer to Remove (optional):
+                        </label>
+                        <input type="text" id="layerToRemove" value="SO_visuals"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    </div>
+                    <div>
+                        <label for="subPath" class="block text-sm font-medium text-gray-700 mb-2">
+                            Sub Path (for naming):
+                        </label>
+                        <input type="text" id="subPath" value="haven"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Error Display -->
+            <div id="errorDisplay" class="hidden mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
+                <div class="flex items-start space-x-2">
+                    <svg class="w-5 h-5 text-red-500 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <div>
+                        <p class="font-medium text-red-800">Error</p>
+                        <p id="errorMessage" class="text-red-700 text-sm"></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Processing Display -->
+            <div id="processingDisplay" class="hidden mb-6">
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                    <div class="flex items-center space-x-2 mb-2">
+                        <svg id="processingIcon" class="w-5 h-5 text-blue-500 icon-spin" fill="none"
+                            stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15">
+                            </path>
+                        </svg>
+                        <span id="processingStatus" class="font-medium text-blue-800">Processing...</span>
+                    </div>
+                    <div class="w-full bg-blue-100 rounded-full h-3 mb-2">
+                        <div id="progressBar" class="progress-bar h-3 rounded-full" style="width: 0%"></div>
+                    </div>
+                    <p id="progressText" class="text-blue-700 text-sm">0% complete</p>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex space-x-4 mb-8">
+                <button id="processBtn" disabled
+                    class="btn-primary flex items-center space-x-2 px-6 py-3 rounded-lg font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                    <span>Process File</span>
+                </button>
+
+                <button id="resetBtn"
+                    class="bg-gray-500 hover:bg-gray-600 flex items-center space-x-2 px-6 py-3 text-white rounded-lg font-medium transition-all">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15">
+                        </path>
+                    </svg>
+                    <span>Reset</span>
+                </button>
+            </div>
+
+            <!-- Results Section -->
+            <div id="resultsDisplay" class="hidden">
+                <div class="bg-green-50 border border-green-200 rounded-lg p-6 mb-6">
+                    <div class="flex items-center space-x-2 mb-4">
+                        <svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7">
+                            </path>
+                        </svg>
+                        <h3 class="text-xl font-bold text-green-800">Processing Complete!</h3>
+                    </div>
+
+                    <!-- Statistics -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                        <div class="bg-white p-4 rounded-lg shadow-sm">
+                            <p class="text-sm text-gray-600">Original Size</p>
+                            <p id="statOriginalSize" class="text-lg font-bold text-blue-600">-</p>
+                        </div>
+                        <div class="bg-white p-4 rounded-lg shadow-sm">
+                            <p class="text-sm text-gray-600">Compressed Size</p>
+                            <p id="statCompressedSize" class="text-lg font-bold text-green-600">-</p>
+                        </div>
+                        <div class="bg-white p-4 rounded-lg shadow-sm">
+                            <p class="text-sm text-gray-600">Compression Ratio</p>
+                            <p id="statCompressionRatio" class="text-lg font-bold text-purple-600">-</p>
+                        </div>
+                        <div class="bg-white p-4 rounded-lg shadow-sm">
+                            <p class="text-sm text-gray-600">Image Dimensions</p>
+                            <p id="statImageDimensions" class="text-lg font-bold text-indigo-600">-</p>
+                        </div>
+                    </div>
+
+                    <!-- Download Buttons -->
+                    <div class="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4">
+                        <button id="downloadB64Btn"
+                            class="btn-success flex items-center justify-center space-x-2 px-6 py-3 text-white rounded-lg font-medium">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
+                                </path>
+                            </svg>
+                            <span>Download Base64 Text</span>
+                        </button>
+
+                        <button id="downloadImageBtn"
+                            class="btn-success flex items-center justify-center space-x-2 px-6 py-3 text-white rounded-lg font-medium">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z">
+                                </path>
+                            </svg>
+                            <span>Download PNG Image</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden canvas for image processing -->
+    <canvas id="canvas" style="display: none;"></canvas>
+
+    <script>
+        class TiledMapProcessor {
+            constructor() {
+                this.selectedFile = null;
+                this.isProcessing = false;
+                this.results = {
+                    base64Data: null,
+                    imageData: null,
+                    stats: {}
+                };
+
+                this.initEventListeners();
+            }
+
+            initEventListeners() {
+                const dropZone = document.getElementById('dropZone');
+                const fileInput = document.getElementById('fileInput');
+
+                dropZone.addEventListener('click', () => fileInput.click());
+                dropZone.addEventListener('dragover', this.handleDragOver.bind(this));
+                dropZone.addEventListener('dragleave', this.handleDragLeave.bind(this));
+                dropZone.addEventListener('drop', this.handleDrop.bind(this));
+
+                fileInput.addEventListener('change', this.handleFileSelect.bind(this));
+                document.getElementById('processBtn').addEventListener('click', this.processFile.bind(this));
+                document.getElementById('resetBtn').addEventListener('click', this.resetProcessor.bind(this));
+                document.getElementById('downloadB64Btn').addEventListener('click', this.downloadBase64.bind(this));
+                document.getElementById('downloadImageBtn').addEventListener('click', this.downloadImage.bind(this));
+            }
+
+            handleDragOver(e) {
+                e.preventDefault();
+                document.getElementById('dropZone').classList.remove('drop-zone-default');
+                document.getElementById('dropZone').classList.add('drop-zone-selected');
+            }
+
+            handleDragLeave(e) {
+                e.preventDefault();
+                document.getElementById('dropZone').classList.add('drop-zone-default');
+                document.getElementById('dropZone').classList.remove('drop-zone-selected');
+            }
+
+            handleDrop(e) {
+                e.preventDefault();
+                document.getElementById('dropZone').classList.add('drop-zone-default');
+                document.getElementById('dropZone').classList.remove('drop-zone-selected');
+
+                const files = e.dataTransfer.files;
+                if (files.length > 0 && files[0].name.toLowerCase().endsWith('.json')) {
+                    this.setSelectedFile(files[0]);
+                } else {
+                    this.showError('Please select a valid JSON file');
+                }
+            }
+
+            handleFileSelect(e) {
+                const file = e.target.files[0];
+                if (file && file.name.toLowerCase().endsWith('.json')) {
+                    this.setSelectedFile(file);
+                } else {
+                    this.showError('Please select a valid JSON file');
+                }
+            }
+
+            setSelectedFile(file) {
+                this.selectedFile = file;
+                this.updateStepIndicator(1, 'completed');
+                this.showFileSelected(file);
+                this.hideError();
+                this.hideResults();
+                document.getElementById('processBtn').disabled = false;
+            }
+
+            showFileSelected(file) {
+                document.getElementById('uploadPrompt').classList.add('hidden');
+                document.getElementById('fileSelected').classList.remove('hidden');
+                document.getElementById('fileName').textContent = file.name;
+                document.getElementById('fileSize').textContent = this.formatBytes(file.size);
+
+                document.getElementById('dropZone').classList.remove('drop-zone-default');
+                document.getElementById('dropZone').classList.add('drop-zone-selected');
+            }
+
+            async processFile() {
+                if (!this.selectedFile || this.isProcessing) return;
+
+                this.isProcessing = true;
+                this.showProcessing();
+                this.hideError();
+                this.hideResults();
+                document.getElementById('processBtn').disabled = true;
+
+                try {
+                    // Step 1: Read and parse JSON
+                    this.updateStepIndicator(2, 'active');
+                    this.updateProgress(10, 'Reading JSON file...');
+                    console.log("in before")
+                    const jsonText = await this.readFile(this.selectedFile);
+                    console.log("in after")
+
+                    console.log("in before parse")
+                    this.updateProgress(20, 'Parsing JSON...');
+                    const jsonData = JSON.parse(jsonText);
+                    console.log("in after parse")
+
+                    // Step 2: Clean and process JSON
+                    console.log("in before clean")
+                    this.updateProgress(30, 'Cleaning JSON data...');
+                    const cleanedData = await this.cleanJsonData(jsonData);
+                    console.log("in after clean")
+
+                    console.log("in before minify")
+                    this.updateProgress(40, 'Minifying JSON...');
+                    const minifiedJson = JSON.stringify(cleanedData, null, 0);
+                    this.updateStepIndicator(2, 'completed');
+                    console.log("in after minify")
+
+
+                    // Step 3: Compress with LZW and encode to Base64
+                    console.log("in before compress")
+                    this.updateStepIndicator(3, 'active');
+                    this.updateProgress(50, 'Compressing with LZW...');
+                    const compressedData = await this.lzwCompress(minifiedJson);
+                    console.log("in after compress")
+
+                    console.log("in before base64")
+                    this.updateProgress(60, 'Encoding to Base64...');
+                    const base64Data = this.encodeBase64(compressedData);
+                    this.updateStepIndicator(3, 'completed');
+                    console.log("in after base64")
+
+                    // Step 4: Convert to image
+                    console.log("in before image")
+                    this.updateStepIndicator(4, 'active');
+                    this.updateProgress(70, 'Converting to image...');
+                    const imageResult = await this.convertToImage(base64Data);
+                    this.updateStepIndicator(4, 'completed');
+                    console.log("in after image")
+
+                    // Store results
+                    this.results.base64Data = base64Data;
+                    this.results.imageData = imageResult;
+                    this.results.stats = {
+                        originalSize: jsonText.length,
+                        compressedSize: compressedData.length,
+                        base64Size: base64Data.length,
+                        compressionRatio: ((jsonText.length - compressedData.length) / jsonText.length * 100).toFixed(1),
+                        imageDimensions: `${imageResult.width}×${imageResult.height}`
+                    };
+
+                    this.updateProgress(100, 'Processing complete!');
+                    this.hideProcessing();
+                    this.showResults();
+
+                } catch (error) {
+                    this.hideProcessing();
+                    this.showError(`Processing failed: ${error.message}`);
+                    this.resetStepIndicators();
+                } finally {
+                    this.isProcessing = false;
+                    if (this.selectedFile) {
+                        document.getElementById('processBtn').disabled = false;
+                    }
+                }
+            }
+
+
+            // Replace the readFile method with this memory-optimized version
+            async readFile(file) {
+                // For files larger than 10MB, use a different approach
+                if (file.size > 10 * 1024 * 1024) {
+                    return this.readLargeFile(file);
+                }
+
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.onerror = reject;
+                    reader.readAsText(file);
+                });
+            }
+
+            // New method specifically for large files
+            async readLargeFile(file) {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    const chunkSize = 512 * 1024; // Smaller 512KB chunks for better memory management
+                    let offset = 0;
+                    const chunks = []; // Store chunks in array instead of concatenating strings
+                    let totalChunks = Math.ceil(file.size / chunkSize);
+                    let processedChunks = 0;
+
+                    const readChunk = () => {
+                        if (offset >= file.size) {
+                            // Join all chunks at once - more memory efficient than incremental concatenation
+                            try {
+                                const result = chunks.join('');
+                                chunks.length = 0; // Clear chunks array to free memory
+                                resolve(result);
+                            } catch (error) {
+                                reject(new Error('File too large to process in browser memory'));
+                            }
+                            return;
+                        }
+
+                        const slice = file.slice(offset, offset + chunkSize);
+                        const chunkReader = new FileReader();
+
+                        chunkReader.onload = (e) => {
+                            chunks.push(e.target.result);
+                            offset += chunkSize;
+                            processedChunks++;
+
+                            // Update progress
+                            const progress = Math.min((processedChunks / totalChunks) * 15, 15);
+                            this.updateProgress(progress, `Reading file... ${Math.round((processedChunks / totalChunks) * 100)}%`);
+
+                            // Longer delay for large files to prevent browser freezing
+                            setTimeout(readChunk, 10);
+                        };
+
+                        chunkReader.onerror = (error) => {
+                            reject(new Error('Failed to read file chunk: ' + error.message));
+                        };
+
+                        chunkReader.readAsText(slice);
+                    };
+
+                    readChunk();
+                });
+            }
+
+            async cleanJsonData(data) {
+                const layerToRemove = document.getElementById('layerToRemove').value.trim();
+
+                // Remove specified layer
+                if (data.layers && layerToRemove) {
+                    data.layers = data.layers.filter(layer => layer.name !== layerToRemove);
+                }
+
+                // Remove base object keys
+                const keysToRemoveBase = [
+                    'compressionlevel', 'infinite', 'type', 'version', 'tilewidth',
+                    'tileheight', 'spacing', 'orientation', 'tiledversion',
+                    'imagewidth', 'imageheight', 'margin', 'image', 'columns',
+                    'renderorder', 'nextlayerid', 'nextobjectid'
+                ];
+
+                keysToRemoveBase.forEach(key => {
+                    if (key in data) delete data[key];
+                });
+
+                // Clean tilesets
+                if (data.tilesets) {
+                    const keysToRemoveTileset = [
+                        'tilecount', 'tilewidth', 'tileheight', 'spacing',
+                        'imagewidth', 'imageheight', 'margin', 'image', 'columns'
+                    ];
+
+                    data.tilesets.forEach(tileset => {
+                        keysToRemoveTileset.forEach(key => {
+                            if (key in tileset) delete tileset[key];
+                        });
+                    });
+                }
+
+                // Clean layers
+                if (data.layers) {
+                    const keysToRemoveLayer = [
+                        'opacity', 'x', 'y', 'width', 'height', 'id',
+                        'visible', 'type', 'name', 'draworder'
+                    ];
+
+                    data.layers.forEach(layer => {
+                        keysToRemoveLayer.forEach(key => {
+                            if (key in layer) delete layer[key];
+                        });
+                    });
+                }
+
+                return data;
+            }
+
+
+            // Replace the existing lzwCompress method with this optimized version
+            async lzwCompress(data) {
+                const dataSize = data.length;
+
+                // For very large files (over 15MB), use chunked processing
+                if (dataSize > 15 * 1024 * 1024) {
+                    return this.lzwCompressChunked(data);
+                }
+
+                // Standard compression for smaller files
+                return this.lzwCompressStandard(data);
+            }
+
+            // Chunked LZW compression for very large files
+            async lzwCompressChunked(data) {
+                const chunkSize = 2 * 1024 * 1024; // 2MB chunks
+                const totalChunks = Math.ceil(data.length / chunkSize);
+                const compressedChunks = [];
+
+                // Initialize dictionaries once
+                const { encodeDict, decodeDict } = this.initializeLZWDictionaries();
+
+                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                    const start = chunkIndex * chunkSize;
+                    const end = Math.min(start + chunkSize, data.length);
+                    const chunk = data.slice(start, end);
+
+                    // Update progress
+                    const progress = 50 + (chunkIndex / totalChunks) * 10;
+                    this.updateProgress(progress, `Compressing chunk ${chunkIndex + 1}/${totalChunks}...`);
+
+                    // Compress chunk
+                    const compressedChunk = await this.compressChunkAsync(chunk, encodeDict, decodeDict);
+                    compressedChunks.push(compressedChunk);
+
+                    // Yield control every chunk to prevent blocking
+                    await new Promise(resolve => setTimeout(resolve, 10));
+
+                    // Force garbage collection if available
+                    if (window.gc && chunkIndex % 5 === 0) {
+                        window.gc();
+                    }
+                }
+
+                // Join compressed chunks
+                const result = compressedChunks.join('|CHUNK|'); // Use delimiter to separate chunks
+
+                // Verify integrity on a sample (not full data for performance)
+                const sampleSize = Math.min(1000, data.length);
+                const sample = data.slice(0, sampleSize);
+                const compressedSample = await this.lzwCompressStandard(sample);
+                const decompressedSample = this.lzwDecompressStandard(compressedSample);
+
+                if (decompressedSample !== sample) {
+                    throw new Error('LZW compression integrity check failed on sample');
+                }
+
+                return result;
+            }
+
+            // Standard LZW compression for smaller files
+            async lzwCompressStandard(data) {
+                return new Promise((resolve, reject) => {
+                    try {
+                        const { encodeDict, decodeDict } = this.initializeLZWDictionaries();
+
+                        setTimeout(() => {
+                            try {
+                                const compressed = this.compressSync(data, encodeDict);
+
+                                // Verify integrity for standard compression
+                                const decompressed = this.decompressSync(compressed, decodeDict);
+                                if (decompressed !== data) {
+                                    reject(new Error('LZW compression integrity check failed'));
+                                } else {
+                                    resolve(compressed);
+                                }
+                            } catch (error) {
+                                reject(error);
+                            }
+                        }, 0);
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+            }
+
+            // Initialize LZW dictionaries (moved to separate method for reuse)
+            initializeLZWDictionaries() {
+                const encodeDict = {};
+                const decodeDict = {};
+                const numericEncodingChars = {};
+
+                // Build numeric encoding chars (skip ASCII 45 which is "-")
+                let c = 33;
+                for (let i = 0; i < 100; i++) {
+                    if (c === 45) { // ASCII code for "-"
+                        c++; // skip "-", it is allocated as a lzw encoding delimiter
+                    }
+                    numericEncodingChars[i] = String.fromCharCode(c);
+                    c++;
+                }
+
+                // Build encode/decode dictionaries
+                for (let i in numericEncodingChars) {
+                    encodeDict[i] = numericEncodingChars[i];
+                    decodeDict[numericEncodingChars[i]] = parseInt(i);
+                }
+
+                return { encodeDict, decodeDict };
+            }
+
+            // Async chunk compression
+            async compressChunkAsync(chunk, encodeDict, decodeDict) {
+                return new Promise((resolve) => {
+                    setTimeout(() => {
+                        const result = this.compressSync(chunk, encodeDict);
+                        resolve(result);
+                    }, 0);
+                });
+            }
+
+            // Synchronous compression (core LZW algorithm)
+            compressSync(text, encodeDict) {
+                // Get dictionary function (matches Lua getdict)
+                function getdict(isEncode) {
+                    const dict = {};
+                    const s = " !#$%&'\"()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+                    const len = s.length;
+                    for (let i = 1; i <= len; i++) {
+                        if (isEncode) {
+                            dict[s.charAt(i - 1)] = i;
+                        } else {
+                            dict[i] = s.charAt(i - 1);
+                        }
+                    }
+                    return { dict, len };
+                }
+
+                // Get encoded dict code (matches Lua getEncodedDictCode)
+                function getEncodedDictCode(code) {
+                    const encodedDictCode = [];
+                    let nums = "";
+                    const codeStr = code.toString();
+
+                    for (let i = 0; i < codeStr.length; i++) {
+                        const n = codeStr[i];
+                        const temp = nums + n;
+                        if (temp[0] !== "0" && encodeDict[parseInt(temp)] !== undefined) {
+                            nums = temp;
+                        } else {
+                            encodedDictCode.push(encodeDict[parseInt(nums)]);
+                            nums = n;
+                        }
+                    }
+                    encodedDictCode.push(encodeDict[parseInt(nums)]);
+                    return encodedDictCode.join("");
+                }
+
+                // Encode dict codes (matches Lua encodeDictCodes)
+                function encodeDictCodes(codes) {
+                    const translated = [];
+                    for (let i = 0; i < codes.length; i++) {
+                        translated[i] = getEncodedDictCode(codes[i]);
+                    }
+                    return translated;
+                }
+
+                // Main compress function
+                let s = "";
+                let ch;
+                const dlen = text.length;
+                const result = [];
+                const { dict, len: dictLen } = getdict(true);
+                let len = dictLen;
+                let temp;
+
+                for (let i = 0; i < dlen; i++) {
+                    ch = text[i];
+                    temp = s + ch;
+                    if (dict[temp] !== undefined) {
+                        s = temp;
+                    } else {
+                        result.push(dict[s]);
+                        len = len + 1;
+                        dict[temp] = len;
+                        s = ch;
+                    }
+                }
+                result.push(dict[s]);
+
+                const finalResult = encodeDictCodes(result);
+                return finalResult.join("-");
+            }
+
+            // Synchronous decompression (for verification)
+            decompressSync(text, decodeDict) {
+                // Get dictionary function
+                function getdict(isEncode) {
+                    const dict = {};
+                    const s = " !#$%&'\"()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+                    const len = s.length;
+                    for (let i = 1; i <= len; i++) {
+                        if (isEncode) {
+                            dict[s.charAt(i - 1)] = i;
+                        } else {
+                            dict[i] = s.charAt(i - 1);
+                        }
+                    }
+                    return { dict, len };
+                }
+
+                // Decode dict codes
+                function decodeDictCodes(codes) {
+                    const translated = [];
+                    for (let i = 0; i < codes.length; i++) {
+                        translated[i] = "";
+                        for (let j = 0; j < codes[i].length; j++) {
+                            const c = codes[i][j];
+                            translated[i] += decodeDict[c];
+                        }
+                        translated[i] = parseInt(translated[i]);
+                    }
+                    return translated;
+                }
+
+                const { dict, len: dictLen } = getdict(false);
+                let entry;
+                let ch;
+                let prevCode, currCode;
+                const result = [];
+                let data = text.split("-");
+
+                data = decodeDictCodes(data);
+
+                prevCode = data[0];
+                result.push(dict[prevCode]);
+
+                for (let i = 1; i < data.length; i++) {
+                    currCode = data[i];
+                    entry = dict[currCode];
+                    if (entry !== undefined) {
+                        ch = entry[0];
+                        result.push(entry);
+                    } else {
+                        ch = dict[prevCode][0];
+                        result.push(dict[prevCode] + ch);
+                    }
+                    dict[Object.keys(dict).length + 1] = dict[prevCode] + ch;
+                    prevCode = currCode;
+                }
+                return result.join("");
+            }
+
+            // Standard decompression method (for backward compatibility)
+            lzwDecompressStandard(compressedData) {
+                const { decodeDict } = this.initializeLZWDictionaries();
+                return this.decompressSync(compressedData, decodeDict);
+            }
+
+            encodeBase64(data) {
+                const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                let result = '';
+
+                for (let i = 0; i < data.length; i += 3) {
+                    const a = data.charCodeAt(i) || 0;
+                    const b = data.charCodeAt(i + 1) || 0;
+                    const c = data.charCodeAt(i + 2) || 0;
+
+                    const bitmap = (a << 16) | (b << 8) | c;
+
+                    result += base64Chars.charAt((bitmap >> 18) & 63);
+                    result += base64Chars.charAt((bitmap >> 12) & 63);
+                    result += base64Chars.charAt((bitmap >> 6) & 63);
+                    result += base64Chars.charAt(bitmap & 63);
+                }
+
+                // Add padding
+                const padding = (3 - (data.length % 3)) % 3;
+                for (let i = 0; i < padding; i++) {
+                    result = result.slice(0, -1) + '=';
+                }
+
+                return result;
+            }
+
+            async convertToImage(base64Data) {
+                const textBytes = new TextEncoder().encode(base64Data);
+                const pixelsNeeded = Math.ceil(textBytes.length / 4);
+
+                // Calculate optimal dimensions
+                let width = Math.ceil(Math.sqrt(pixelsNeeded));
+                let height = Math.ceil(pixelsNeeded / width);
+
+                // Ensure within 1024x1024 limit
+                if (width > 1024 || height > 1024) {
+                    if (pixelsNeeded > 1024 * 1024) {
+                        throw new Error('Data too large for image encoding');
+                    }
+                    width = Math.min(1024, width);
+                    height = Math.ceil(pixelsNeeded / width);
+                }
+
+                const canvas = document.getElementById('canvas');
+                const ctx = canvas.getContext('2d');
+
+                // Create image data
+                canvas.width = width;
+                canvas.height = height;
+                const imageData = ctx.createImageData(width, height);
+                const data = imageData.data;
+
+                // Process in chunks for better performance
+                const chunkSize = 1024 * 4; // 4KB chunks
+                const totalChunks = Math.ceil(base64Data.length / chunkSize);
+
+                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                    const startIdx = chunkIndex * chunkSize;
+                    const endIdx = Math.min(startIdx + chunkSize, base64Data.length);
+
+                    // Fill pixel data
+                    for (let i = startIdx; i < endIdx; i++) {
+                        const pixelIndex = Math.floor(i / 4);
+                        const channelIndex = i % 4;
+                        const dataIndex = pixelIndex * 4 + channelIndex;
+
+                        if (dataIndex < data.length) {
+                            data[dataIndex] = textBytes[i];
+                        }
+                    }
+
+                    // Update progress
+                    this.updateProgress(80 + ((chunkIndex + 1) / totalChunks) * 15,
+                        `Creating image... ${Math.round(((chunkIndex + 1) / totalChunks) * 100)}%`);
+
+                    // Yield control
+                    if (chunkIndex % 10 === 0) {
+                        await new Promise(resolve => setTimeout(resolve, 0));
+                    }
+                }
+
+                // Fill remaining pixels with zeros
+                for (let i = Math.ceil(textBytes.length / 4) * 4; i < data.length; i++) {
+                    data[i] = 0;
+                }
+
+                // Put image data on canvas
+                ctx.putImageData(imageData, 0, 0);
+
+                return new Promise((resolve) => {
+                    canvas.toBlob((blob) => {
+                        resolve({
+                            blob,
+                            width,
+                            height,
+                            url: URL.createObjectURL(blob)
+                        });
+                    }, 'image/png');
+                });
+            }
+
+            updateStepIndicator(step, status) {
+                const stepElement = document.getElementById(`step${step}`);
+                stepElement.classList.remove('step-active', 'step-completed');
+
+                if (status === 'active') {
+                    stepElement.classList.add('step-active');
+                } else if (status === 'completed') {
+                    stepElement.classList.add('step-completed');
+                }
+            }
+
+            resetStepIndicators() {
+                for (let i = 1; i <= 4; i++) {
+                    const stepElement = document.getElementById(`step${i}`);
+                    stepElement.classList.remove('step-active', 'step-completed');
+                }
+            }
+
+            updateProgress(percentage, status) {
+                document.getElementById('progressBar').style.width = percentage + '%';
+                document.getElementById('progressText').textContent = `${percentage.toFixed(1)}% complete`;
+                document.getElementById('processingStatus').textContent = status;
+            }
+
+            showProcessing() {
+                document.getElementById('processingDisplay').classList.remove('hidden');
+            }
+
+            hideProcessing() {
+                document.getElementById('processingDisplay').classList.add('hidden');
+            }
+
+            showError(message) {
+                document.getElementById('errorMessage').textContent = message;
+                document.getElementById('errorDisplay').classList.remove('hidden');
+            }
+
+            hideError() {
+                document.getElementById('errorDisplay').classList.add('hidden');
+            }
+
+            showResults() {
+                const stats = this.results.stats;
+                document.getElementById('statOriginalSize').textContent = this.formatBytes(stats.originalSize);
+                document.getElementById('statCompressedSize').textContent = this.formatBytes(stats.compressedSize);
+                document.getElementById('statCompressionRatio').textContent = `${stats.compressionRatio}%`;
+                document.getElementById('statImageDimensions').textContent = stats.imageDimensions;
+
+                document.getElementById('resultsDisplay').classList.remove('hidden');
+            }
+
+            hideResults() {
+                document.getElementById('resultsDisplay').classList.add('hidden');
+            }
+
+            downloadBase64() {
+                if (!this.results.base64Data) return;
+
+                const subPath = document.getElementById('subPath').value.trim() || 'processed';
+                const filename = `${subPath}_map_compressed.txt`;
+
+                const blob = new Blob([this.results.base64Data], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+
+            downloadImage() {
+                if (!this.results.imageData) return;
+
+                const subPath = document.getElementById('subPath').value.trim() || 'processed';
+                const filename = `${subPath}_map_encoded.png`;
+
+                const a = document.createElement('a');
+                a.href = this.results.imageData.url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
+
+            resetProcessor() {
+                this.selectedFile = null;
+                this.isProcessing = false;
+                this.results = { base64Data: null, imageData: null, stats: {} };
+
+                document.getElementById('fileInput').value = '';
+                document.getElementById('uploadPrompt').classList.remove('hidden');
+                document.getElementById('fileSelected').classList.add('hidden');
+                document.getElementById('dropZone').classList.remove('drop-zone-selected');
+                document.getElementById('dropZone').classList.add('drop-zone-default');
+                document.getElementById('processBtn').disabled = true;
+
+                this.hideError();
+                this.hideProcessing();
+                this.hideResults();
+                this.resetStepIndicators();
+                this.updateStepIndicator(1, 'active');
+            }
+
+            formatBytes(bytes) {
+                if (bytes === 0) return '0 B';
+                const k = 1024;
+                const sizes = ['B', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+            }
+        }
+
+        // Initialize the processor when the page loads
+        document.addEventListener('DOMContentLoaded', function () {
+            new TiledMapProcessor();
+        });
+    </script>
+</body>
+
+</html>
